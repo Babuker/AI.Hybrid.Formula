@@ -3,7 +3,7 @@ True Physics-Informed Neural Network (PINN) - Final Version v29.36
 Multi-Objective Tablet Manufacturing Optimization
 
 Author: Babuker A. Abdalla
-Version: 29.36 (Complete & Correct - Two Stars on Pareto)
+Version: 29.36 (Complete - Fixed Cache + Two Stars on Pareto)
 """
 
 import streamlit as st
@@ -876,16 +876,19 @@ def generate_full_pdf_report(api, mcc, pvpp, mgst, binder, pressure, speed, gran
     return pdf_bytes
 
 # ================================================================
-# 6. MODEL LOADING / TRAINING (AUTO-REPAIR)
+# 6. MODEL LOADING / TRAINING (FIXED CACHE)
 # ================================================================
 
 @st.cache_resource
 def load_or_train_model():
     checkpoint_path = '/tmp/pinn_best_model.pt'
+    
+    # -------------------- LOADING (with explicit flags) --------------------
     try:
         if os.path.exists(checkpoint_path):
             st.caption("📂 Loading cached model from /tmp...")
-            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            # Use weights_only=False explicitly (default, but we make it clear)
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
             required_keys = ['model_state', 'scaler', 'y_scaler', 'feature_names', 'df', 'loss_history']
             if all(k in checkpoint for k in required_keys):
                 model = MultiTaskTruePINN(input_dim=13)
@@ -904,6 +907,7 @@ def load_or_train_model():
         if os.path.exists(checkpoint_path):
             os.remove(checkpoint_path)
 
+    # -------------------- TRAINING (if loading failed) --------------------
     st.caption("🔄 Training model from scratch (v29.36 enhanced settings)...")
 
     df, feature_names = generate_pinn_data(n_samples=N_SAMPLES)
@@ -989,16 +993,31 @@ def load_or_train_model():
 
     model.cpu()
 
-    torch.save({
+    # -------------------- SAVE with verification (FIX) --------------------
+    checkpoint_data = {
         'model_state': model.state_dict(),
         'scaler': scaler,
         'y_scaler': y_scaler,
         'feature_names': feature_names,
         'df': df,
         'loss_history': {'train': train_losses, 'val': val_losses}
-    }, checkpoint_path)
+    }
 
-    st.success("✅ Model trained and cached successfully!")
+    # Save to a temporary file first, then rename to avoid partial writes
+    temp_path = checkpoint_path + ".tmp"
+    torch.save(checkpoint_data, temp_path)
+
+    # Verify that we can load the saved file immediately
+    try:
+        test_load = torch.load(temp_path, map_location='cpu', weights_only=False)
+        # If successful, rename to final path
+        os.rename(temp_path, checkpoint_path)
+        st.success("✅ Model trained and cached successfully (verified).")
+    except Exception as e:
+        st.error(f"❌ Failed to verify saved checkpoint: {e}. The model will not be cached for this session.")
+        # Keep the temp file for debugging, but don't rename
+        pass
+
     return model, scaler, y_scaler, feature_names, df, {'train': train_losses, 'val': val_losses}
 
 # ================================================================
@@ -1029,7 +1048,7 @@ with st.sidebar:
     - ✅ **Device:** GPU (if available)
     - ✅ **Loss:** 3.5× MSE for Density & ER
     - ✅ **Noise:** Ultra-low (σ = 0.003, 0.008, 0.008)
-    - ✅ **Cache:** Auto-repair if corrupted
+    - ✅ **Cache:** Auto-repair if corrupted (with verification)
     - ✅ **NSGA-II:** Pop={NSGA_POP_SIZE}, Gen={NSGA_GENERATIONS}
     """)
     st.info("🔬 **v29.36** — Two stars on Pareto")
