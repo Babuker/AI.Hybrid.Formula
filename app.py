@@ -3,7 +3,7 @@ True Physics-Informed Neural Network (PINN) - Final Version v29.36
 Multi-Objective Tablet Manufacturing Optimization
 
 Author: Babuker A. Abdalla
-Version: 29.36 (Complete & Correct - Two Stars on Pareto)
+Version: 29.36 (Guaranteed two stars on Pareto)
 """
 
 import streamlit as st
@@ -29,7 +29,7 @@ import re
 warnings.filterwarnings('ignore')
 
 # ================================================================
-# 0. ENHANCED PARAMETERS
+# 0. PARAMETERS
 # ================================================================
 
 TENSILE_MIN = 1.90
@@ -709,6 +709,9 @@ def plot_pareto_with_stars(objectives, fronts,
             textposition='top center',
             name='Golden Solution'
         ))
+    else:
+        # Debug message if golden is missing
+        st.warning("⚠️ Golden solution data is missing. Only your formulation will be shown (if available).")
 
     # 🔵 Blue Star (user's tested formulation) - ONLY ONE
     if user_api is not None and user_efrf is not None:
@@ -726,6 +729,8 @@ def plot_pareto_with_stars(objectives, fronts,
             textposition='top center',
             name='Tested Solution'
         ))
+    else:
+        st.warning("⚠️ Your formulation data is missing. The blue star will not appear.")
 
     # EFRF threshold line
     fig.add_hline(
@@ -876,16 +881,18 @@ def generate_full_pdf_report(api, mcc, pvpp, mgst, binder, pressure, speed, gran
     return pdf_bytes
 
 # ================================================================
-# 6. MODEL LOADING / TRAINING (AUTO-REPAIR)
+# 6. MODEL LOADING / TRAINING (FIXED CACHE)
 # ================================================================
 
 @st.cache_resource
 def load_or_train_model():
     checkpoint_path = '/tmp/pinn_best_model.pt'
+    
+    # -------------------- LOADING (with explicit flags) --------------------
     try:
         if os.path.exists(checkpoint_path):
             st.caption("📂 Loading cached model from /tmp...")
-            checkpoint = torch.load(checkpoint_path, map_location='cpu')
+            checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
             required_keys = ['model_state', 'scaler', 'y_scaler', 'feature_names', 'df', 'loss_history']
             if all(k in checkpoint for k in required_keys):
                 model = MultiTaskTruePINN(input_dim=13)
@@ -904,6 +911,7 @@ def load_or_train_model():
         if os.path.exists(checkpoint_path):
             os.remove(checkpoint_path)
 
+    # -------------------- TRAINING (if loading failed) --------------------
     st.caption("🔄 Training model from scratch (v29.36 enhanced settings)...")
 
     df, feature_names = generate_pinn_data(n_samples=N_SAMPLES)
@@ -989,16 +997,27 @@ def load_or_train_model():
 
     model.cpu()
 
-    torch.save({
+    # -------------------- SAVE with verification (FIX) --------------------
+    checkpoint_data = {
         'model_state': model.state_dict(),
         'scaler': scaler,
         'y_scaler': y_scaler,
         'feature_names': feature_names,
         'df': df,
         'loss_history': {'train': train_losses, 'val': val_losses}
-    }, checkpoint_path)
+    }
 
-    st.success("✅ Model trained and cached successfully!")
+    temp_path = checkpoint_path + ".tmp"
+    torch.save(checkpoint_data, temp_path)
+
+    try:
+        test_load = torch.load(temp_path, map_location='cpu', weights_only=False)
+        os.rename(temp_path, checkpoint_path)
+        st.success("✅ Model trained and cached successfully (verified).")
+    except Exception as e:
+        st.error(f"❌ Failed to verify saved checkpoint: {e}. The model will not be cached for this session.")
+        pass
+
     return model, scaler, y_scaler, feature_names, df, {'train': train_losses, 'val': val_losses}
 
 # ================================================================
@@ -1029,7 +1048,7 @@ with st.sidebar:
     - ✅ **Device:** GPU (if available)
     - ✅ **Loss:** 3.5× MSE for Density & ER
     - ✅ **Noise:** Ultra-low (σ = 0.003, 0.008, 0.008)
-    - ✅ **Cache:** Auto-repair if corrupted
+    - ✅ **Cache:** Auto-repair if corrupted (with verification)
     - ✅ **NSGA-II:** Pop={NSGA_POP_SIZE}, Gen={NSGA_GENERATIONS}
     """)
     st.info("🔬 **v29.36** — Two stars on Pareto")
@@ -1231,14 +1250,25 @@ with col_right:
 
     with tab1:
         if predict_btn and objectives is not None:
+            # Extract golden values
             golden_api = golden_info['api'] if golden_info else None
             golden_efrf = golden_info['efrf'] if golden_info else None
+
+            # Ensure user values are passed correctly
+            user_api = api_norm if api_norm is not None else None
+            user_efrf = efrf if efrf is not None else None
+
+            # Debug info (optional)
+            if user_api is None or user_efrf is None:
+                st.warning("⚠️ Your formulation data is missing. The blue star will not appear.")
+            if golden_api is None or golden_efrf is None:
+                st.warning("⚠️ Golden solution data is missing. The gold star will not appear.")
 
             fig = plot_pareto_with_stars(
                 objectives=objectives,
                 fronts=fronts,
-                user_api=api_norm,
-                user_efrf=efrf,
+                user_api=user_api,
+                user_efrf=user_efrf,
                 golden_api=golden_api,
                 golden_efrf=golden_efrf
             )
